@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+swiftmock = { path = ".", editable = true, extras = ["lint", "release", "dev", "tests"] }
+
+[dev-packages]
+towncrier = '*'
+sphinx = '*'
+sphinx-rtd-theme = '*'
+
+[scripts]
+release = 'inv release'
+tests = "pytest -v tests"
+draft = "towncrier --draft"
+changelog = "towncrier"
+build = "setup.py sdist bdist_wheel"
