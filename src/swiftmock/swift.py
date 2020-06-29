@@ -4,6 +4,7 @@ import hashlib
 import http
 import io
 import json
+import logging
 import mimetypes
 import operator
 import os
@@ -20,6 +21,10 @@ from unittest import mock
 import pytest
 from requests.exceptions import RequestException, StreamConsumedError
 from requests.utils import stream_decode_response_unicode
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(logging.StreamHandler())
 
 
 def generate_requestid():
@@ -630,6 +635,8 @@ class MockConnection:
         if path is None:
             path = "__base__"
         metadata = self.read_metadata()
+        container = container.strip("/")
+        path = path.lstrip("/") if path else None
         if container not in metadata:
             metadata[container] = {}
         if path not in metadata[container]:
@@ -1055,6 +1062,7 @@ class MockConnection:
     ) -> Dict[str, Union[datetime.datetime, str]]:
         path = self.get_path(container, key=obj)
         if not path.exists():
+            logger.info(f"Path does not exist: {path!s}")
             from swiftclient.exceptions import ClientException
 
             raise ClientException(f"No such path: {path!s}")
@@ -1063,6 +1071,7 @@ class MockConnection:
             current_timestamp = get_swift_object_date(datetime.datetime.utcnow())
             path_contents = path.read_bytes()
         except Exception:
+            logger.error(f"Failed to read path contents: {path!s})")
             from swiftclient.exceptions import ClientException
 
             raise ClientException(f"Not a file: {path!s}")
@@ -1073,7 +1082,8 @@ class MockConnection:
         if encoding is not None:
             mimetype = f"{mimetype}; encoding={encoding}"
         transaction_id = generate_requestid()
-        extra_headers = self.get_path_metadata(container.strip("/"), name.lstrip("/"))
+        extra_headers = self.get_path_metadata(container, name)
+        logger.info(f"Extra metadata: {extra_headers}")
         content_type_key = next(
             iter(k for k in extra_headers if k.lower() == "content-type"), None
         )
@@ -1329,7 +1339,7 @@ class MockConnection:
             )
             metadata.update(headers)
             self.write_metadata(container, obj, metadata)
-        elif isinstance(contents, bytes):
+        if isinstance(contents, bytes):
             dest.write_bytes(contents)
         elif isinstance(contents, str):
             dest.write_text(contents)

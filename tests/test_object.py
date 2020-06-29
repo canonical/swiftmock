@@ -221,3 +221,28 @@ def test_copy_object(test_cls):
     headers = test_cls.conn.head_object(test_cls.containername, test_cls.objectname_2)
     assert headers.get("x-object-meta-color") == "Else"
     assert headers.get("x-object-meta-taste") is None
+
+
+def test_symlink(test_cls):
+    test_cls.conn.put_object(
+        test_cls.containername, test_cls.objectname, test_cls.test_data
+    )
+    headers = {
+        "X-Symlink-Target": f"/{test_cls.containername}/{test_cls.objectname}",
+    }
+    symlink_object = "fake-symlink"
+    test_cls.conn.put_object(
+        test_cls.containername,
+        symlink_object,
+        b"",
+        content_length=0,
+        content_type="application/symlink",
+        headers=headers,
+    )
+    headers = test_cls.conn.head_object(test_cls.containername, symlink_object)
+    assert headers.get("content-type") == "application/symlink"
+    assert (
+        headers.get("X-Symlink-Target")
+        == f"/{test_cls.containername}/{test_cls.objectname}"
+    )
+    assert headers.get("content-length") == "0"
