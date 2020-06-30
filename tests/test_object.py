@@ -239,7 +239,9 @@ def test_symlink(test_cls):
         content_type="application/symlink",
         headers=headers,
     )
-    headers = test_cls.conn.head_object(test_cls.containername, symlink_object)
+    headers = test_cls.conn.head_object(
+        test_cls.containername, symlink_object, query_string="symlink=get"
+    )
     assert headers.get("content-type") == "application/symlink"
     assert (
         headers.get("X-Symlink-Target")

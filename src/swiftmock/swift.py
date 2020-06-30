@@ -962,10 +962,8 @@ class MockConnection:
         if "content-type" in metadata:
             headers["content-type"] = metadata.pop("content-type")
         headers.update(metadata)
-        if (
-            query_string
-            and query_string == "symlink=get"
-            and "X-Symlink-Target" in metadata
+        if "X-Symlink-Target" in metadata and not (
+            query_string and query_string == "symlink=get"
         ):
             headers = metadata
             target_container, _, target = (
@@ -1083,7 +1081,7 @@ class MockConnection:
             mimetype = f"{mimetype}; encoding={encoding}"
         transaction_id = generate_requestid()
         extra_headers = self.get_path_metadata(container, name)
-        logger.info(f"Extra metadata: {extra_headers}")
+        logger.info(f"Extra metadata for path {path!s}: {extra_headers}")
         content_type_key = next(
             iter(k for k in extra_headers if k.lower() == "content-type"), None
         )
@@ -1107,10 +1105,10 @@ class MockConnection:
             "x-openstack-request-id": transaction_id,
         }
         headers.update(extra_headers)
-        if (
-            query_string
-            and query_string == "symlink=get"
-            and "X-Symlink-Target" in extra_headers
+        # if the query string 'symlink=get' is provided, we should operate on the symlink
+        # otherwise we should operate on the referenced object
+        if "X-Symlink-Target" in extra_headers and not (
+            query_string and query_string == "symlink=get"
         ):
             target_container, _, target = (
                 extra_headers["X-Symlink-Target"].lstrip("/").partition("/")
