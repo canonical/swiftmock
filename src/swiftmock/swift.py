@@ -212,6 +212,14 @@ def summarize_path(path: pathlib.Path):
     return summary
 
 
+def get_path_or_container_name(metadata: Dict[str, str]) -> str:
+    if "name" in metadata:
+        return str(metadata["name"]).lstrip("/")
+    elif "subdir" in metadata:
+        return metadata["subdir"]
+    return metadata
+
+
 def is_fp_closed(fp):
     try:
         return fp.isclosed()
@@ -940,9 +948,10 @@ class MockConnection:
             files = self.iter_dir(target, recurse=True, container=container)
         results = []
         is_in_markers = False if marker else True
-        for r in sorted(files, key=operator.itemgetter("name")):
+
+        for r in sorted(files, key=get_path_or_container_name):
             result = r.copy()
-            name = str(result["name"]).lstrip("/")
+            name = get_path_or_container_name(r)
             if not is_in_markers:
                 if name.startswith(marker):
                     is_in_markers = True
@@ -974,8 +983,6 @@ class MockConnection:
                     target_container, obj=prefix, query_string=query_string
                 )
             )
-        if limit and not full_listing:
-            results = results[:limit]
         return headers, results
 
     def get_object(
