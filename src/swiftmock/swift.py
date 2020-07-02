@@ -15,38 +15,46 @@ import tempfile
 import uuid
 from collections.abc import Iterable
 from functools import reduce
-from typing import Any, Dict, Generator, List, Optional, Tuple, Union
+from typing import IO, Any, Dict, Generator, Iterator, List, Optional, Tuple, Union
 from unittest import mock
 
-import pytest
 from requests.exceptions import RequestException, StreamConsumedError
 from requests.utils import stream_decode_response_unicode
+
+TPATH_METADATA = Dict[Union[str, None], Union[str, None]]
+TCONTAINER_METADATA = Dict[str, TPATH_METADATA]
+TFILEHEADER_DICT = Dict[str, Union[str, int, pathlib.Path, datetime.datetime, None]]
+TDIRHEADER_DICT = Dict[str, str]
+THEADER_DICT = Union[TFILEHEADER_DICT, TDIRHEADER_DICT]
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler())
 
 
-def generate_requestid():
+def generate_requestid() -> str:
     initial_id = "".join(str(uuid.uuid4()).split("-"))
     field1 = initial_id[:20]
     field2 = initial_id[-10:]
     return f"tx{field1}-{field2}"
 
 
-def generate_id():
+def generate_id() -> str:
     return "".join(str(uuid.uuid4()).split("-"))
 
 
-def user_id():
+def user_id() -> str:
     return generate_id()
 
 
-def domain_id():
+def domain_id() -> str:
     return generate_id()
 
 
-def gen_account_headers(container_dicts):
+def gen_account_headers(
+    container_dicts: List[Dict[str, Union[str, int]]]
+) -> Dict[str, str]:
     """
     {
     'date': 'Thu, 18 Jun 2020 00:28:54 GMT',
@@ -84,7 +92,7 @@ def gen_account_headers(container_dicts):
     timestamp = str(
         min(
             [
-                datetime.datetime.fromisoformat(c["last_modified"]).timestamp()
+                datetime.datetime.fromisoformat(str(c["last_modified"])).timestamp()
                 for c in container_dicts
             ]
         )
@@ -109,7 +117,9 @@ def gen_account_headers(container_dicts):
     }
 
 
-def get_container_headers(path: pathlib.Path, path_dicts: List[Dict[str, str]]):
+def get_container_headers(
+    path: pathlib.Path, path_dicts: List[THEADER_DICT]
+) -> TDIRHEADER_DICT:
     """
     {
     'date': 'Thu, 18 Jun 2020 22:35:02 GMT',
@@ -148,7 +158,7 @@ def get_container_headers(path: pathlib.Path, path_dicts: List[Dict[str, str]]):
         "date": get_swift_object_date(datetime.datetime.utcnow()),
         "server": "Apache/2.4.29 (Ubuntu)",
         "content-length": str(len(str(path_dicts))),
-        "x-container-object-count": summary["count"],
+        "x-container-object-count": str(summary["count"]),
         "x-timestamp": datetime.datetime.utcfromtimestamp(
             path.stat().st_ctime
         ).isoformat(),
@@ -157,7 +167,7 @@ def get_container_headers(path: pathlib.Path, path_dicts: List[Dict[str, str]]):
         "last-modified": get_swift_object_date(
             datetime.datetime.utcfromtimestamp(path.stat().st_mtime)
         ),
-        "x-container-bytes-used": summary["bytes"],
+        "x-container-bytes-used": str(summary["bytes"]),
         "content-type": "application/json; charset=utf-8",
         "x-trans-id": request_id,
         "x-openstack-request-id": request_id,
@@ -165,7 +175,7 @@ def get_container_headers(path: pathlib.Path, path_dicts: List[Dict[str, str]]):
     return headers
 
 
-def get_swift_object_date(date: datetime.date) -> str:
+def get_swift_object_date(date: datetime.datetime) -> str:
     return (
         date.astimezone(datetime.timezone.utc)
         .strftime("%a, %d %b %Y %H:%M:%S %Z")
@@ -173,11 +183,11 @@ def get_swift_object_date(date: datetime.date) -> str:
     )
 
 
-def get_swift_date(date: datetime.date) -> str:
+def get_swift_date(date: datetime.datetime) -> str:
     return date.astimezone(datetime.timezone.utc).isoformat()
 
 
-def recurse(path: pathlib.Path):
+def recurse(path: pathlib.Path) -> Generator[pathlib.Path, None, None]:
     if path.is_dir():
         for child in path.iterdir():
             if child.is_dir():
@@ -188,7 +198,7 @@ def recurse(path: pathlib.Path):
         yield path
 
 
-def summarize_path(path: pathlib.Path):
+def summarize_path(path: pathlib.Path) -> Dict[str, Union[str, int]]:
     def get_path_dicts(target):
         yield {"count": 0, "bytes": 0}
         for child in recurse(target):
@@ -212,15 +222,15 @@ def summarize_path(path: pathlib.Path):
     return summary
 
 
-def get_path_or_container_name(metadata: Dict[str, str]) -> str:
+def get_path_or_container_name(metadata: THEADER_DICT) -> str:
     if "name" in metadata:
         return str(metadata["name"]).lstrip("/")
     elif "subdir" in metadata:
-        return metadata["subdir"]
-    return metadata
+        return str(metadata["subdir"])
+    raise ValueError(f"Missing key 'name' or 'subdir' in metadata: {metadata}")
 
 
-def is_fp_closed(fp):
+def is_fp_closed(fp) -> bool:
     try:
         return fp.isclosed()
     except AttributeError:
@@ -237,9 +247,10 @@ def is_fp_closed(fp):
 
 
 class MockUrllib3Response(object):
-    def __init__(self, path):
-        self._fp = io.open(path, "rb")
+    def __init__(self, path: Union[str, pathlib.Path]) -> None:
+        self._fp: IO[bytes] = io.open(path, "rb")
         self._fp_bytes_read = 0
+        self._body: Optional[bytes] = None
         self.auto_close = True
         self.length_remaining = os.stat(path).st_size
 
@@ -249,30 +260,32 @@ class MockUrllib3Response(object):
     def __exit__(self, *args, **kwargs):
         self.close()
 
-    def stream(self, amt=2 ** 16, decode_content=None):
+    def stream(
+        self, amt=2 ** 16, decode_content: Optional[bool] = None
+    ) -> Generator[Union[bytes, str], None, None]:
         while not is_fp_closed(self._fp):
             data = self.read(amt=amt, decode_content=decode_content)
             if data:
                 yield data
 
-    def close(self):
+    def close(self) -> None:
         if not self.closed:
             self._fp.close()
 
     @property
-    def closed(self):
+    def closed(self) -> bool:
         if not self.auto_close:
-            return io.IOBase.closed.__get__(self)
+            return io.IOBase.closed.__get__(self)  # type: ignore
         elif self._fp is None:
             return True
         elif hasattr(self._fp, "isclosed"):
-            return self._fp.isclosed()
+            return self._fp.isclosed()  # type: ignore
         elif hasattr(self._fp, "closed"):
             return self._fp.closed
         else:
             return True
 
-    def fileno(self):
+    def fileno(self) -> int:
         if self._fp is None:
             raise IOError("HTTPResponse has no file to get a fileno from")
         elif hasattr(self._fp, "fileno"):
@@ -286,7 +299,7 @@ class MockUrllib3Response(object):
     def readinto(self, b):
         # This method is required for `io` module compatibility.
         temp = self.read(len(b))
-        if len(temp) == 0:
+        if not temp or len(temp) == 0:
             return 0
         else:
             b[: len(temp)] = temp
@@ -299,7 +312,12 @@ class MockUrllib3Response(object):
         if self._fp:
             return self.read(cache_content=True)
 
-    def read(self, amt=None, decode_content=None, cache_content=False):
+    def read(
+        self,
+        amt: Optional[int] = None,
+        decode_content: Optional[bool] = None,
+        cache_content: bool = False,
+    ) -> Optional[bytes]:
         if self._fp is None:
             return
         fp_closed = getattr(self._fp, "closed", False)
@@ -335,9 +353,9 @@ class MockUrllib3Response(object):
         return self._fp_bytes_read
 
     def __iter__(self):
-        buffer = []
+        buffer: List[bytes] = []
         for chunk in self.stream(decode_content=True):
-            if b"\n" in chunk:
+            if isinstance(chunk, bytes) and b"\n" in chunk:
                 chunk = chunk.split(b"\n")
                 yield b"".join(buffer) + chunk[0] + b"\n"
                 for x in chunk[1:-1]:
@@ -347,6 +365,9 @@ class MockUrllib3Response(object):
                 else:
                     buffer = []
             else:
+                if chunk and not isinstance(chunk, bytes):
+                    chunk = chunk.encode()
+                assert isinstance(chunk, bytes)
                 buffer.append(chunk)
         if buffer:
             yield b"".join(buffer)
@@ -536,7 +557,7 @@ class MockRetryBody:
         buf = None
         try:
             buf = self.resp.read(length)
-            self.bytes_read += len(buf)
+            self.bytes_read += len(buf) if buf else 0
         except OSError:
             raise
         except RequestException:
@@ -602,39 +623,45 @@ class MockConnection:
     storage plugin system.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.tmpdir = kwargs.pop("tmpdir", None)
-        self.retries = kwargs.pop("retries", 5)
-        if not self.tmpdir:
-            self.tmpdir = tempfile.TemporaryDirectory()
-            atexit.register(self.tmpdir.cleanup)
-            self.base = pathlib.Path(self.tmpdir.name)
-        else:
-            self.base = pathlib.Path(self.tmpdir)
-        self.metadata_file = kwargs.pop(
+    def __init__(
+        self, *args: Any, tmpdir: Optional[str] = None, retries: int = 5, **kwargs: Any
+    ) -> None:
+        if not tmpdir:
+            _tmpdir = tempfile.TemporaryDirectory()
+            atexit.register(_tmpdir.cleanup)
+            tmpdir = _tmpdir.name
+        self.tmpdir = tmpdir
+        self.retries = retries
+        self.base = pathlib.Path(self.tmpdir)
+        self.flavour = pathlib._posix_flavour  # type: ignore
+        self.metadata_file: pathlib.Path = kwargs.pop(
             "metadata_file", self.base.joinpath("metadata.json")
         )
         self.init_metadata()
-        self._account_metadata = {}
+        self._account_metadata: Dict[str, str] = {}
         self.attempts = 0
         _conn_mock = mock.MagicMock("swiftclient.client.Connection", autospec=True)
         _connection = _conn_mock()
         _connection.get_account.return_value = ("", "")
         self._connection = _connection
 
-    def _ensure_strlike(self, value: Any) -> Optional[Union[str, bytes]]:
+    def _ensure_strlike(self, value: Any) -> str:
         if value is None:
-            return value
-        if isinstance(value, (float, int)):
+            return ""
+        elif isinstance(value, (float, int)):
             return str(value)
-        return value
+        elif isinstance(value, bytes):
+            return value.decode()
+        elif isinstance(value, str):
+            return value
+        return str(value)
 
     def init_metadata(self) -> None:
         content = self.metadata_file.read_text()
         if not content:
             self.metadata_file.write_text("{}")
 
-    def read_metadata(self) -> Dict[str, Dict[str, Dict[str, str]]]:
+    def read_metadata(self) -> TCONTAINER_METADATA:
         return json.loads(self.metadata_file.read_text())
 
     def get_path_metadata(
@@ -645,12 +672,11 @@ class MockConnection:
         metadata = self.read_metadata()
         container = container.strip("/")
         path = path.lstrip("/") if path else None
-        if container not in metadata:
-            metadata[container] = {}
-        if path not in metadata[container]:
-            metadata[container][path] = {}
-        result = metadata[container][path].copy()
-        return {k: self._ensure_strlike(v) for k, v in result.items()}
+        container_metadata = metadata.get(container, {})
+        result = container_metadata.get(path, {})
+        assert isinstance(result, dict)
+        rv: Dict[str, str] = {k: self._ensure_strlike(v) for k, v in result.items()}
+        return rv
 
     def write_metadata(
         self,
@@ -667,11 +693,11 @@ class MockConnection:
         if container not in contents:
             contents[container] = {}
         if path not in contents[container]:
-            contents[container][path] = {}
+            contents[container][path] = {}  # type: ignore
         if not fresh_metadata:
-            contents[container][path].update(data)
+            contents[container][path].update(data)  # type: ignore
         else:
-            contents[container][path] = data
+            contents[container][path] = data  # type: ignore
         self.metadata_file.write_text(json.dumps(contents))
 
     def __getattr__(self, key: str, *args: Any, **kwargs: Any) -> Any:
@@ -688,9 +714,11 @@ class MockConnection:
             reset_func, func, *args, **kwargs
         )
 
-    def get_path(self, container: str, key: Optional[str] = None) -> pathlib.Path:
-        if container.startswith(self.base._flavour.sep):
-            container = container.lstrip(self.base._flavour.sep)
+    def get_path(
+        self, container: str, key: Optional[Union[pathlib.Path, str]] = None
+    ) -> pathlib.Path:
+        if container.startswith(self.flavour.sep):
+            container = container.lstrip(self.flavour.sep)
         path = self.base / container
         if key:
             path = path / key
@@ -699,29 +727,26 @@ class MockConnection:
     def get_relative_path(
         self, base_container: str, path: pathlib.Path
     ) -> pathlib.Path:
-        if base_container.startswith(self.base._flavour.sep):
-            base_container = base_container.lstrip(self.base._flavour.sep)
+        if base_container.startswith(self.flavour.sep):
+            base_container = base_container.lstrip(self.flavour.sep)
         container_path = self.base / base_container
         return path.relative_to(container_path)
 
     def get_swift_file_attrs(
         self, path: pathlib.Path, container: str = ""
-    ) -> Dict[str, Union[int, str, pathlib.Path, datetime.datetime]]:
+    ) -> TFILEHEADER_DICT:
         if not path.is_absolute():
             path = self.get_path(container, key=path)
         if not path.exists():
             from swiftclient.exceptions import ClientException
 
             raise ClientException(f"No such file: {path!s}")
-        try:
-            last_modified = get_swift_date(
-                datetime.datetime.fromtimestamp(path.stat().st_mtime)
-            )
-        except Exception:
-            print(list(path.parent.iterdir()), file=sys.stderr)
+        last_modified = get_swift_date(
+            datetime.datetime.fromtimestamp(path.stat().st_mtime)
+        )
         data = path.read_bytes()
         name = str(self.get_relative_path(container, path))
-        mimetype, encoding = mimetypes.guess_type(path)
+        mimetype, encoding = mimetypes.guess_type(str(path))
         if mimetype is None:
             mimetype = "application/octet-stream"
         if encoding is not None:
@@ -739,9 +764,7 @@ class MockConnection:
 
     def iter_dir(
         self, path: pathlib.Path, recurse: bool = False, container: str = ""
-    ) -> Generator[
-        Dict[str, Union[int, str, pathlib.Path, datetime.datetime]], None, None
-    ]:
+    ) -> Iterator[THEADER_DICT]:
         if path.is_dir():
             for sub_path in path.iterdir():
                 if sub_path.is_dir():
@@ -784,8 +807,8 @@ class MockConnection:
         from swiftclient.client import head_container
 
         self._retry(None, head_container, container, headers)
-        if container.startswith(self.base._flavour.sep):
-            container = container.lstrip(self.base._flavour.sep)
+        if container.startswith(self.flavour.sep):
+            container = container.lstrip(self.flavour.sep)
         headers, _ = self._get_container(container, headers=headers)
         #  if "content-length" in headers:
         #  headers.pop("content-length")
@@ -796,8 +819,6 @@ class MockConnection:
 
         self._retry(None, head_account, headers=headers)
         headers, _ = self._get_account()
-        #  if "content-length" in headers:
-        #  headers.pop("content-length")
         return headers
 
     def get_account(
@@ -809,7 +830,7 @@ class MockConnection:
         full_listing: bool = False,
         headers: Optional[Dict[str, str]] = None,
         delimiter: Optional[str] = None,
-    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+    ) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
         from swiftclient.client import get_account
 
         self._retry(
@@ -842,7 +863,7 @@ class MockConnection:
         full_listing: bool = False,
         headers: Optional[Dict[str, str]] = None,
         delimiter: Optional[str] = None,
-    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+    ) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
         container_paths = [pth for pth in self.base.iterdir() if pth.is_dir()]
         containers = {}
         is_in_markers = False if marker else True
@@ -853,20 +874,23 @@ class MockConnection:
             matches_prefix = (
                 prefix and container.name.startswith(prefix)
             ) or not prefix
+            matches_marker = isinstance(marker, str) and container.name.startswith(
+                marker
+            )
             # Markers operate as exclusive (i.e. the outer matches are not included)
             # so we set the value here before evaluating whether to include this path
             # to ensure we don't accidentally include the end marker path
             if end_marker is not None and container.name.startswith(end_marker):
                 is_in_markers = False
                 continue
-            elif not is_in_markers and container.name.startswith(marker):
+            elif not is_in_markers and matches_marker:
                 is_in_markers = True
                 continue
-            elif marker and is_in_markers:
+            elif is_in_markers and marker:
                 if matches_prefix:
                     results.append(container.name)
                 continue
-            elif matches_prefix and (not marker or is_in_markers):
+            elif (not marker or is_in_markers) and matches_prefix:
                 results.append(container.name)
         account_headers = gen_account_headers(list(containers.values()))
         account_headers.update(
@@ -953,7 +977,7 @@ class MockConnection:
             result = r.copy()
             name = get_path_or_container_name(r)
             if not is_in_markers:
-                if name.startswith(marker):
+                if isinstance(marker, str) and name.startswith(marker):
                     is_in_markers = True
                 continue
             if end_marker is not None and name.startswith(end_marker):
@@ -969,20 +993,23 @@ class MockConnection:
         metadata_path = path if path else prefix
         metadata = self.get_path_metadata(container.strip("/"), metadata_path)
         if "content-type" in metadata:
-            headers["content-type"] = metadata.pop("content-type")
+            headers["content-type"] = metadata.pop(
+                "content-type", "application/octet-stream"
+            )
         headers.update(metadata)
         if "X-Symlink-Target" in metadata and not (
             query_string and query_string == "symlink=get"
         ):
-            headers = metadata
+            headers = {k: v for k, v in metadata.items() if k is not None}
             target_container, _, target = (
                 metadata["X-Symlink-Target"].lstrip("/").partition("/")
             )
             headers.update(
-                get_container_headers(
+                self.get_container_headers(
                     target_container, obj=prefix, query_string=query_string
                 )
             )
+        results = [{k: self._ensure_strlike(v) for k, v in i.items()} for i in results]
         return headers, results
 
     def get_object(
@@ -994,7 +1021,7 @@ class MockConnection:
         response_dict: Optional[Dict[str, str]] = None,
         headers: Optional[Dict[str, str]] = None,
         attempts: Optional[int] = None,
-    ) -> Tuple[Dict[str, str], bytes]:
+    ) -> Tuple[Dict[str, str], Union[bytes, MockRetryBody, None]]:
         from swiftclient.client import get_object
 
         self._retry(
@@ -1034,6 +1061,7 @@ class MockConnection:
         )
         if not resp_chunk_size:
             content = resp.read()
+            assert isinstance(resp, bytes)
             return headers, content
         return headers, resp
 
@@ -1043,7 +1071,7 @@ class MockConnection:
         obj: str,
         headers: Optional[Dict[str, str]] = None,
         query_string: Optional[str] = None,
-    ) -> Dict[str, Union[datetime.datetime, str]]:
+    ) -> Dict[str, str]:
         from swiftclient.client import head_object
 
         self._retry(
@@ -1064,7 +1092,7 @@ class MockConnection:
         obj: str,
         headers: Optional[Dict[str, str]] = None,
         query_string: Optional[str] = None,
-    ) -> Dict[str, Union[datetime.datetime, str]]:
+    ) -> Dict[str, str]:
         path = self.get_path(container, key=obj)
         if not path.exists():
             logger.info(f"Path does not exist: {path!s}")
@@ -1151,7 +1179,7 @@ class MockConnection:
         self,
         container: str,
         headers: Dict[str, str],
-        response_dict: Dict[str, str] = None,
+        response_dict: Optional[Dict[str, str]] = None,
     ) -> None:
         from swiftclient.client import post_container
 
@@ -1254,7 +1282,7 @@ class MockConnection:
     def _merge_headers(
         self,
         content_type: Optional[str] = None,
-        content_length: Optional[str] = None,
+        content_length: Optional[Union[str, int]] = None,
         etag: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, str]:
@@ -1279,7 +1307,7 @@ class MockConnection:
         if content_type:
             results["content-type"] = content_type
         if content_length:
-            results["content-length"] = content_length
+            results["content-length"] = str(content_length)
         if etag:
             results["etag"] = etag
         return results
@@ -1288,7 +1316,7 @@ class MockConnection:
         self,
         container: str,
         obj: str,
-        contents: Union[str, bytes],
+        contents: Union[str, bytes, io.IOBase],
         content_length: Optional[int] = None,
         etag: Any = None,
         chunk_size: Optional[int] = None,
@@ -1317,7 +1345,7 @@ class MockConnection:
         dest = self.get_path(container, key=obj)
         if not dest.parent.exists():
             dest.parent.mkdir(parents=True)
-        if getattr(contents, "read", None):
+        if getattr(contents, "read", None) and isinstance(contents, io.BufferedIOBase):
             contents = contents.read()
         if content_type is not None and not headers:
             metadata = self.get_path_metadata(container, obj)
@@ -1350,7 +1378,7 @@ class MockConnection:
             dest.write_text(contents)
         elif isinstance(contents, Iterable) and not isinstance(contents, (str, bytes)):
             with dest.open("wb") as fh:
-                for chunk in contents:
+                for chunk in contents:  # type: ignore
                     fh.write(chunk)
         elif isinstance(contents, io.FileIO):
             with dest.open("wb") as fh:
