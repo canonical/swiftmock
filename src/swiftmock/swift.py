@@ -918,7 +918,7 @@ class MockConnection:
         headers: Optional[Dict[str, str]] = None,
         version_marker: Any = None,
         query_string: Optional[str] = None,
-    ) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
+    ) -> Tuple[Dict[str, str], List[Dict[str, Union[str, int]]]]:
         from swiftclient.client import get_container
 
         self._retry(
@@ -960,7 +960,7 @@ class MockConnection:
         full_listing: bool = False,
         headers: Optional[Dict[str, str]] = None,
         query_string: Optional[str] = None,
-    ) -> Tuple[Dict[str, str], List[Dict[str, str]]]:
+    ) -> Tuple[Dict[str, str], List[Dict[str, Union[str, int]]]]:
         target = self.get_path(container, key=prefix)
         if not target.is_dir():
             from swiftclient.exceptions import ClientException
@@ -1009,7 +1009,6 @@ class MockConnection:
                     target_container, obj=prefix, query_string=query_string
                 )
             )
-        results = [{k: self._ensure_strlike(v) for k, v in i.items()} for i in results]
         return headers, results
 
     def get_object(
@@ -1061,7 +1060,7 @@ class MockConnection:
         )
         if not resp_chunk_size:
             content = resp.read()
-            assert isinstance(resp, bytes)
+            assert isinstance(content, bytes)
             return headers, content
         return headers, resp
 
