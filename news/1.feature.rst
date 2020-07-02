@@ -1,0 +1,1 @@
+Created initial release with test suite ported from ``python-swiftclient`` to ensure full API compatibility.

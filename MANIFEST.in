@@ -8,7 +8,7 @@ exclude .travis.yml
 exclude tox.ini
 exclude appveyor.yml
 exclude Pipfile*
-
+exclude .pre-commit-config.yaml
 recursive-include docs Makefile *.rst *.py *.bat
 recursive-exclude docs requirements*.txt
 
