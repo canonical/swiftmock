@@ -52,6 +52,13 @@ def domain_id() -> str:
     return generate_id()
 
 
+def fromisoformat(dt: str) -> datetime.datetime:
+    try:
+        return datetime.datetime.fromisoformat(dt)
+    except AttributeError:
+        return datetime.datetime.strptime(dt, "%Y-%m-%dT%H:%M:%S.%f")
+
+
 def gen_account_headers(
     container_dicts: List[Dict[str, Union[str, int]]]
 ) -> Dict[str, str]:
@@ -92,7 +99,7 @@ def gen_account_headers(
     timestamp = str(
         min(
             [
-                datetime.datetime.fromisoformat(str(c["last_modified"])).timestamp()
+                fromisoformat(str(c["last_modified"])).timestamp()
                 for c in container_dicts
             ]
         )
