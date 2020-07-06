@@ -17,3 +17,6 @@ tests = "pytest -v tests"
 draft = "towncrier --draft"
 changelog = "towncrier"
 build = "setup.py sdist bdist_wheel"
+
+[pipenv]
+allow_prereleases = true
