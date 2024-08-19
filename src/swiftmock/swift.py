@@ -9,6 +9,7 @@ import mimetypes
 import operator
 import os
 import pathlib
+import posixpath
 import shutil
 import sys
 import tempfile
@@ -640,7 +641,7 @@ class MockConnection:
         self.tmpdir = tmpdir
         self.retries = retries
         self.base = pathlib.Path(self.tmpdir)
-        self.flavour = pathlib._posix_flavour  # type: ignore
+        self.flavour = posixpath
         self.metadata_file: pathlib.Path = kwargs.pop(
             "metadata_file", self.base.joinpath("metadata.json")
         )
